@@ -1,18 +1,16 @@
 require 'helper'
 
-class TestMigrationV1ToV2 < Test::Unit::TestCase
-  context "GenericModel" do
+class TestRipple < Test::Unit::TestCase
+  context "TestDocument" do
     setup do
     end
 
-    should "read both document types" do
-      assert v1 = TestDocument.find('v1_doc')
+    should "read the ripple document" do
       assert v2 = TestDocument.find('v2_doc')
-      assert_equal 'this is v1 data', v1.message
       assert_equal 'this is v2 data', v2.message
     end
 
-    should "write in v2" do
+    should "write the ripple document" do
       document = TestDocument.new
       document.message = 'here is some new data'
       document.save
@@ -20,7 +18,7 @@ class TestMigrationV1ToV2 < Test::Unit::TestCase
       assert_equal document.message, same_document.message
     end
 
-    should "write in v2 raw confirmation" do
+    should "write the ripple document raw confirmation" do
       document = TestDocument.new
       document.message = 'here is some new data'
       document.save

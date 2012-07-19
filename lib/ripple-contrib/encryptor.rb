@@ -13,10 +13,7 @@ module Ripple
       # Creates an Encryptor that is prepared to encrypt/decrypt a blob.
       # @param [Hash] config the key/cipher/iv needed to initialize OpenSSL
       def initialize(config)
-        # ensure that we have the required configuration keys
-        %w(cipher key iv).each do |option|
-          raise(Ripple::Contrib::EncryptorConfigError, "Missing configuration option '#{option}'.") if config[option].nil?
-        end
+        validate(config)
         @config = config
         @cipher = OpenSSL::Cipher.new(@config['cipher'])
       end
@@ -42,6 +39,15 @@ module Ripple
         @cipher.send mode
         @cipher.key = @config['key']
         @cipher.iv  = @config['iv']
+      end
+
+      # Creates an Encryptor that is prepared to encrypt/decrypt a blob.
+      # @param [Hash] config the key/cipher/iv needed to initialize OpenSSL
+      def validate(config)
+        # ensure that we have the required configuration keys
+        %w(cipher key iv).each do |option|
+          raise(Ripple::Contrib::EncryptorConfigError, "Missing configuration option '#{option}'.") if config[option].nil?
+        end
       end
     end
   end

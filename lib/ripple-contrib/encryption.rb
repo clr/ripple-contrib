@@ -2,9 +2,7 @@ require 'openssl'
 require 'ripple'
 
 module Ripple
-
   module Contrib
-
     # When mixed into a Ripple::Document class, this will encrypt the
     # serialized form before it is stored in Riak.  You must register
     # a serializer that will perform the encryption.
@@ -12,188 +10,30 @@ module Ripple
     module Encryption
       extend ActiveSupport::Concern
 
-      @@is_activated = false
-
       included do
-        @@encrypted_content_type = self.encrypted_content_type = 'application/x-json-encrypted'
+        self.encrypted_content_type = 'application/x-json-encrypted'
+        if Ripple::Contrib::Config.new.to_h['encryption'] != false
+          self.is_activated = true
+          Riak::Serializers['application/x-json-encrypted'] = Ripple::Contrib::EncryptedSerializer.new
+        end
       end
 
       module ClassMethods
         # @return [String] the content type to be used to indicate the
-        #     proper encryption scheme. Defaults to 'application/x-json-encrypted'
+        #     proper encryption scheme.
         attr_accessor :encrypted_content_type
+        # @return [Boolean] allow encryption to be turned off in the config file
+        attr_accessor :is_activated
       end
 
       # Overrides the internal method to set the content-type to be
       # encrypted.
       def update_robject
         super
-        if @@is_activated
-          robject.content_type = @@encrypted_content_type
+        if self.class.is_activated
+          robject.content_type = self.class.encrypted_content_type
         end
       end
-
-      def self.activate
-        encryptor = nil
-        begin
-          unless Riak::Serializers['application/x-json-encrypted']
-            config = YAML.load_file("config/encryption.yml")[ENV['RACK_ENV']]
-            encryptor = Ripple::Contrib::EncryptedSerializer.new(OpenSSL::Cipher.new(config['cipher']))
-            encryptor.key = config['key'] if config['key']
-            encryptor.iv = config['iv'] if config['iv']
-            encryptor.base64 = config['base64'] if config['base64']
-            Riak::Serializers['application/x-json-encrypted'] = encryptor
-            @@is_activated = true
-          end
-        rescue Exception => e
-          handle_invalid_encryption_config(e.message, e.backtrace)
-        end
-        encryptor
-      end
-
-      def self.activated
-        @@is_activated
-      end
-
     end
-
-    # Implements the {Riak::Serializer} API for the purpose of
-    # encrypting/decrypting Ripple documents.
-    #
-    # Example usage:
-    #     ::Riak::Serializers['application/x-json-encrypted'] = EncryptedSerializer.new(OpenSSL::Cipher.new("AES-256"))
-    #     class MyDocument
-    #       include Ripple::Document
-    #       include Riak::Encryption
-    #     end
-    #
-    # @see Encryption
-    class EncryptedSerializer
-      # @return [String] The Content-Type of the internal format,
-      #      generally "application/json"
-      attr_accessor :content_type
-
-      # @return [OpenSSL::Cipher, OpenSSL::PKey::*] the cipher used to encrypt the object
-      attr_accessor :cipher
-
-      # Cipher-specific settings
-      # @see OpenSSL::Cipher
-      attr_accessor :key, :iv, :key_length, :padding
-
-      # Serialization Options
-      # @return [true, false] Is the encrypted text also base64 encoded?
-      attr_accessor :base64
-
-      # Creates a serializer using the provided cipher and internal
-      # content type. Be sure to set the {#key}, {#iv}, {#key_length},
-      # {#padding} as appropriate for the cipher before attempting
-      # (de-)serialization.
-      # @param [OpenSSL::Cipher] cipher the desired
-      #     encryption/decryption algorithm
-      # @param [String] content_type the Content-Type of the
-      #     unencrypted contents
-      def initialize(cipher, content_type='application/json')
-        @cipher, @content_type = cipher, content_type
-      end
-
-      # Serializes and encrypts the Ruby object using the assigned
-      # cipher and Content-Type.
-      # @param [Object] object the Ruby object to serialize/encrypt
-      # @return [String] the serialized, encrypted form of the object
-      def dump(object)
-        JsonDocument.new(object).encrypt
-        # v1 method commented out below
-        # internal = ::Riak::Serializers.serialize(content_type, object)
-        # encrypt(internal)
-      end
-
-      # Decrypts and deserializes the blob using the assigned cipher
-      # and Content-Type.
-      # @param [String] blob the original content from Riak
-      # @return [Object] the decrypted and deserialized object
-      def load(object)
-        # try the v1 way first
-        begin
-          internal = decrypt(object)
-          ::Riak::Serializers.deserialize(content_type, internal)
-        # if that doesn't work, try the v2 way
-        rescue OpenSSL::Cipher::CipherError
-          EncryptedJsonDocument.new(object).decrypt
-        end
-      end
-
-      private
-
-      # generates a new iv each call unless a static (less secure)
-      # iv is used.
-      def encrypt(object)
-        old_version = '0.0.1'
-        result = ''
-        if cipher.respond_to?(:iv=) and @iv == nil
-          iv = OpenSSL::Random.random_bytes(cipher.iv_len)
-          cipher.iv = iv
-          result << old_version << iv
-        end
-
-        if cipher.respond_to?(:public_encrypt)
-          result << cipher.public_encrypt(object)
-        else
-          cipher_setup :encrypt
-          result << cipher.update(object) << cipher.final
-          cipher.reset
-        end
-        return result
-      end
-
-      def decrypt(cipher_text)
-        old_version = '0.0.1'
-
-        if cipher.respond_to?(:iv=) and @iv == nil
-          version = cipher_text.slice(0, old_version.length)
-          cipher.iv = cipher_text.slice(old_version.length, cipher.iv_len)
-          cipher_text = cipher_text.slice(old_version.length + cipher.iv_len, cipher_text.length)
-        end
-
-        if cipher.respond_to?(:private_decrypt)
-          cipher.private_decrypt(cipher_text)
-        else
-          cipher_setup :decrypt
-          result = cipher.update(cipher_text) << cipher.final
-          cipher.reset
-          result
-        end
-      end
-
-      def cipher_setup(mode)
-        cipher.send mode
-        cipher.key        = key        if key
-        cipher.iv         = iv         if iv
-        cipher.key_length = key_length if key_length
-        cipher.padding    = padding    if padding
-      end
-
-      private
-    end
-
   end
-
-end
-
-def handle_invalid_encryption_config(msg, trace)
-  puts <<eos
-
-    The file "config/encryption.yml" is missing or incorrect. You will
-    need to create this file and populate it with a valid cipher,
-    initialization vector and secret key.
-
-    An example is provided in "config/encryption.yml.example".
-eos
-
-  puts "Error Message: " + msg
-  puts "Error Trace:"
-  trace.each do |line|
-    puts line
-  end
-
-  exit 1
 end

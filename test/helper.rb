@@ -19,7 +19,6 @@ rescue RuntimeError
   raise RuntimeError, "Could not connect to the Riak test node."
 end
 # define test Ripple Documents
-Ripple::Contrib::Encryption.activate
 class TestDocument
   include Ripple::Document
   include Ripple::Contrib::Encryption
